@@ -1,0 +1,21 @@
+name: Runner probe
+on:
+  push:
+    branches: ["ci/probe"]
+jobs:
+  ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - run: uname -a
+  mac14:
+    runs-on: macos-14
+    steps:
+      - run: sw_vers
+  mac15:
+    runs-on: macos-15
+    steps:
+      - run: sw_vers
+  mac13:
+    runs-on: macos-13
+    steps:
+      - run: sw_vers
