@@ -39,7 +39,7 @@ jobs:
         run: |
           git clone --recursive --depth 1 https://github.com/theos/theos.git /opt/theos
           rm -rf /opt/theos/sdks
-git clone --depth 1 https://github.com/theos/sdks.git /opt/theos/sdks
+          git clone --depth 1 https://github.com/theos/sdks.git /opt/theos/sdks
           ls /opt/theos/sdks | head -20
           echo "THEOS=/opt/theos" >> "$GITHUB_ENV"
 
