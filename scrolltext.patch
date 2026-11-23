@@ -1,0 +1,621 @@
+--- a/src/hud/HUDRootViewController.mm
++++ b/src/hud/HUDRootViewController.mm
+@@ -3,6 +3,7 @@
+ 
+ #import "HUDRootViewController.h"
+ #import "AnyBackdropView.h"
++#import "HeliumMarqueeLabel.h"
+ #import "Helium-Swift.h"
+ 
+ #import "../widgets/WidgetManager.h"
+@@ -20,6 +21,33 @@
+ 
+ #define NOTIFY_UI_LOCKSTATE    "com.apple.springboard.lockstate"
+ #define NOTIFY_LS_APP_CHANGED  "com.apple.LaunchServices.ApplicationsChanged"
++
++// MARK: Scrolling text support
++// Keep in sync with WidgetModule.scrollText in WidgetManager.swift
++static const NSInteger kScrollTextWidgetID = 10;
++
++// Returns the config dictionary of the scrolling-text widget of a widget set,
++// or nil when the set does not scroll.
++static NSDictionary *ScrollConfigForProperties(NSDictionary *properties)
++{
++    if (![properties isKindOfClass:[NSDictionary class]]) {
++        return nil;
++    }
++    NSArray *widgetIDs = [properties objectForKey:@"widgetIDs"];
++    if (![widgetIDs isKindOfClass:[NSArray class]]) {
++        return nil;
++    }
++    for (id widget in widgetIDs) {
++        if (![widget isKindOfClass:[NSDictionary class]]) {
++            continue;
++        }
++        NSNumber *widgetID = [widget objectForKey:@"widgetID"];
++        if (widgetID && [widgetID integerValue] == kScrollTextWidgetID) {
++            return widget;
++        }
++    }
++    return nil;
++}
+ 
+ static void LaunchServicesApplicationStateChanged
+ (CFNotificationCenterRef center,
+@@ -386,13 +414,16 @@
+         BOOL autoResizes = getBoolFromDictKey(properties, @"autoResizes");
+         float width = getDoubleFromDictKey(properties, @"scale", 50.0);
+         float height = getDoubleFromDictKey(properties, @"scaleY", 12.0);
++        NSDictionary *scrollConfig = ScrollConfigForProperties(properties);
+         if (isEnabled) {
+             [[EZTimer shareInstance] timer:[NSString stringWithFormat:@"labelview%d", i] timerInterval:updateInterval leeway:0.1 resumeType:EZTimerResumeTypeNow queue:EZTimerQueueTypeConcurrent queueName:@"update" repeats:YES action:^(NSString *timerName) {
+                 dispatch_sync(dispatch_get_main_queue(), ^{
+-                    [self updateLabel: labelView updateMaskLabel: maskLabelView backdropView: backdropView identifiers: identifiers fontSize: fontSize autoResizes: autoResizes width: width height: height];
++                    [self updateLabel: labelView updateMaskLabel: maskLabelView backdropView: backdropView identifiers: identifiers fontSize: fontSize autoResizes: autoResizes width: width height: height scrollConfig: scrollConfig];
+                 });
+             }];
+         } else {
++            [(HeliumMarqueeLabel *)labelView configureMarqueeEnabled:NO speed:30.0 gap:24.0 direction:0];
++            [(HeliumMarqueeLabel *)maskLabelView configureMarqueeEnabled:NO speed:30.0 gap:24.0 direction:0];
+             [blurView setEffect:nil];
+             [blurView setHidden:YES];
+             [labelView setHidden:YES];
+@@ -403,21 +434,29 @@
+     }
+ }
+ 
+-- (void) updateLabel:(UILabel *) label updateMaskLabel:(UILabel *) maskLabel backdropView:(AnyBackdropView *) backdropView identifiers:(NSArray *) identifiers fontSize:(double) fontSize autoResizes:(BOOL) autoResizes width:(CGFloat) width height:(CGFloat) height
++- (void) updateLabel:(UILabel *) label updateMaskLabel:(UILabel *) maskLabel backdropView:(AnyBackdropView *) backdropView identifiers:(NSArray *) identifiers fontSize:(double) fontSize autoResizes:(BOOL) autoResizes width:(CGFloat) width height:(CGFloat) height scrollConfig:(NSDictionary *) scrollConfig
+ {
+ #if DEBUG
+     os_log_debug(OS_LOG_DEFAULT, "updateLabel");
+ #endif
++    BOOL scrolls = (scrollConfig != nil);
+     NSAttributedString *attributedText = formattedAttributedString(identifiers, fontSize, label.textColor, [self apiKey], [self dateLocale]);
+     if (attributedText) {
+         // NSLog(@"boom attr:%@", attributedText);
+         [label setAttributedText: attributedText];
+         [maskLabel setAttributedText: attributedText];
+-        if (autoResizes) {
++        // A scrolling label always needs a fixed frame, otherwise it grows to the
++        // full text width and there is nothing left to clip.
++        if (autoResizes && !scrolls) {
+             [self useSizeThatFitsZeroWithLabel:maskLabel];
+         } else {
+             [self useSizeThatFitsCustomWithLabel:maskLabel width: width height: height];
+         }
++        double scrollSpeed = getDoubleFromDictKey(scrollConfig, @"speed", 30.0);
++        double scrollGap = getDoubleFromDictKey(scrollConfig, @"gap", 24.0);
++        NSInteger scrollDirection = getIntFromDictKey(scrollConfig, @"direction", 0);
++        [(HeliumMarqueeLabel *)label configureMarqueeEnabled:scrolls speed:scrollSpeed gap:scrollGap direction:scrollDirection];
++        [(HeliumMarqueeLabel *)maskLabel configureMarqueeEnabled:scrolls speed:scrollSpeed gap:scrollGap direction:scrollDirection];
+     }
+ }
+ 
+@@ -438,6 +477,10 @@
+         NSDictionary *properties = [widgetProps objectAtIndex:i];
+         if (!getBoolFromDictKey(properties, @"isEnabled"))
+             continue;
++        // Stop scrolling while the HUD is hidden (screen locked) to save power.
++        if (i < [_labelViews count]) {
++            [(HeliumMarqueeLabel *)[_labelViews objectAtIndex:i] configureMarqueeEnabled:NO speed:30.0 gap:24.0 direction:0];
++        }
+         [[EZTimer shareInstance] pause:[NSString stringWithFormat:@"labelview%d", i]];
+     }
+ }
+@@ -475,7 +518,7 @@
+         [_contentView addSubview:blurView];
+         [_blurViews addObject:blurView];
+         // create the label
+-        UILabel *labelView = [[UILabel alloc] initWithFrame: CGRectZero];
++        UILabel *labelView = [[HeliumMarqueeLabel alloc] initWithFrame: CGRectZero];
+         labelView.numberOfLines = 0;
+         labelView.lineBreakMode = NSLineBreakByWordWrapping;
+         labelView.translatesAutoresizingMaskIntoConstraints = NO;
+@@ -493,7 +536,7 @@
+         [_backdropViews addObject:backdropView];
+ 
+         // create the mask label
+-        UILabel *maskLabel = [[UILabel alloc] initWithFrame:CGRectZero];
++        UILabel *maskLabel = [[HeliumMarqueeLabel alloc] initWithFrame:CGRectZero];
+         maskLabel.numberOfLines = 0;
+         maskLabel.lineBreakMode = NSLineBreakByWordWrapping;
+         maskLabel.translatesAutoresizingMaskIntoConstraints = NO;
+@@ -618,7 +661,8 @@
+         }
+ 
+         // set the width
+-        if (!getBoolFromDictKey(properties, @"autoResizes")) {
++        // Scrolling text always keeps a fixed frame so the text can be clipped.
++        if (!getBoolFromDictKey(properties, @"autoResizes") || ScrollConfigForProperties(properties) != nil) {
+             [_constraints addObject:[labelView.widthAnchor constraintEqualToConstant:getDoubleFromDictKey(properties, @"scale", 50.0)]];
+             [_constraints addObject:[labelView.heightAnchor constraintEqualToConstant:getDoubleFromDictKey(properties, @"scaleY", 12.0)]];
+         }
+--- a/src/widgets/WidgetManager.mm
++++ b/src/widgets/WidgetManager.mm
+@@ -295,6 +295,7 @@
+  7 = Battery Percentage
+  8 = Charging Symbol
+  9 = Weather
++ 10 = Scrolling Text (the whole widget set becomes a danmaku inside its frame)
+ 
+  TODO:
+  - Music Visualizer
+@@ -374,6 +375,12 @@
+                 widgetString = [WeatherUtils formatTodayResult:today format:widgetString];
+             }
+             break;
++        case 10:
++            // Scrolling Text
++            // The scrolling behaviour itself is handled by HeliumMarqueeLabel;
++            // this id only contributes its own text (may be empty).
++            widgetString = [parsedInfo valueForKey:@"text"];
++            break;
+         default:
+             // do not add anything
+             break;
+--- a/src/controllers/WidgetManager.swift
++++ b/src/controllers/WidgetManager.swift
+@@ -21,6 +21,8 @@
+     
+     case textWidget = 6
+     case weather = 9
++    
++    case scrollText = 10
+ }
+ 
+ struct WidgetIDStruct: Identifiable, Equatable {
+@@ -458,6 +460,8 @@
+             return (NSLocalizedString("Charging Symbol", comment: ""), "⚡️")
+         case .weather:
+             return (NSLocalizedString("Weather", comment: ""), "🌤 20℃")
++        case .scrollText:
++            return (NSLocalizedString("Scrolling Text", comment: ""), NSLocalizedString("Scrolling Danmaku", comment: ""))
+         }
+     }
+     
+--- a/src/views/widget/WidgetPreferencesView.swift
++++ b/src/views/widget/WidgetPreferencesView.swift
+@@ -18,8 +18,13 @@
+     @State var intSelection: Int = 0
+     @State var intSelection2: Int = 0
+     @State var intSelection3: Int = 1
+-    @State var boolSelection: Bool = false
+-    
++@State var boolSelection: Bool = false
++
++    // MARK: Scrolling text
++    @State var scrollSpeed: Double = 30.0
++    @State var scrollGap: Double = 24.0
++    @State var scrollDirection: Int = 0
++
+     @State var modified: Bool = false
+     @State private var isPresented = false
+     
+@@ -280,6 +285,55 @@
+                         }
+                     }
+                 }
++            case .scrollText:
++                // MARK: Scrolling Text Settings
++                ScrollView(.vertical, showsIndicators: false) {
++                    VStack {
++                        HStack {
++                            Text(NSLocalizedString("Label Text", comment:""))
++                                .foregroundColor(.primary)
++                                .bold()
++                            Spacer()
++                            TextField(NSLocalizedString("Scrolling Danmaku", comment:""), text: $text)
++                                .frame(maxWidth: 180)
++                                .multilineTextAlignment(.trailing)
++                        }
++                        HStack {
++                            Text(NSLocalizedString("Scroll Speed", comment:""))
++                                .foregroundColor(.primary)
++                                .bold()
++                            Slider(value: $scrollSpeed, in: 5...150, step: 5)
++                            Text("\(Int(scrollSpeed)) pt/s")
++                                .foregroundColor(.secondary)
++                                .frame(width: 70, alignment: .trailing)
++                        }
++                        HStack {
++                            Text(NSLocalizedString("Scroll Gap", comment:""))
++                                .foregroundColor(.primary)
++                                .bold()
++                            Slider(value: $scrollGap, in: 0...120, step: 4)
++                            Text("\(Int(scrollGap)) pt")
++                                .foregroundColor(.secondary)
++                                .frame(width: 70, alignment: .trailing)
++                        }
++                        Picker(selection: $scrollDirection, label: Text(NSLocalizedString("Scroll Direction", comment:"")).foregroundColor(.primary).bold()) {
++                            Text(NSLocalizedString("Right to Left", comment:"")).tag(0)
++                            Text(NSLocalizedString("Left to Right", comment:"")).tag(1)
++                        }
++                        HStack {
++                            Text(NSLocalizedString("Scroll Hint", comment:""))
++                                .font(.caption)
++                                .foregroundColor(.secondary)
++                            Spacer()
++                        }
++                    }
++                }
++                .onAppear {
++                    text = widgetID.config["text"] as? String ?? ""
++                    scrollSpeed = widgetID.config["speed"] as? Double ?? 30.0
++                    scrollGap = widgetID.config["gap"] as? Double ?? 24.0
++                    scrollDirection = widgetID.config["direction"] as? Int ?? 0
++                }
+             // default:
+             //     Text(NSLocalizedString("No Configurable Aspects", comment:""))
+             }
+@@ -321,6 +375,15 @@
+             modified = true
+         }
+         .onChange(of: boolSelection) { _ in
++            modified = true
++        }
++        .onChange(of: scrollSpeed) { _ in
++            modified = true
++        }
++        .onChange(of: scrollGap) { _ in
++            modified = true
++        }
++        .onChange(of: scrollDirection) { _ in
+             modified = true
+         }
+     }
+@@ -376,6 +439,16 @@
+         case .chargeSymbol:
+             // MARK: Charge Symbol Fill Handling
+             widgetStruct.config["filled"] = boolSelection
++        case .scrollText:
++            // MARK: Scrolling Text Handling
++            if text == "" {
++                widgetStruct.config["text"] = nil
++            } else {
++                widgetStruct.config["text"] = text
++            }
++            widgetStruct.config["speed"] = scrollSpeed
++            widgetStruct.config["gap"] = scrollGap
++            widgetStruct.config["direction"] = scrollDirection
+         case .weather:
+             // MARK: Weather Handling
+             if text == "" {
+--- a/src/views/widget/WidgetPreviewsView.swift
++++ b/src/views/widget/WidgetPreviewsView.swift
+@@ -95,6 +95,10 @@
+             text = "50\(widget.config["showPercentage"] as? Bool ?? true ? "%" : "")"
+         case .chargeSymbol:
+             image = widget.config["filled"] as? Bool ?? true ? Image(systemName: "bolt.fill") : Image(systemName: "bolt")
++        case .scrollText:
++            image = nil
++            let scrollText: String = widget.config["text"] as? String ?? ""
++            text = scrollText == "" ? NSLocalizedString("Scrolling Danmaku", comment:"") : scrollText
+         }
+         widget.modified = false
+     }
+--- a/layout/Applications/Helium.app/en.lproj/Localizable.strings
++++ b/layout/Applications/Helium.app/en.lproj/Localizable.strings
+@@ -175,4 +175,14 @@
+ "Weather" = "Weather";
+ 
+ /* WeatherUtils.mm */
+-"error" = "error";+"error" = "error";
++
++/* Scrolling Text Widget */
++"Scrolling Text" = "Scrolling Text";
++"Scrolling Danmaku" = "Scrolling danmaku";
++"Scroll Speed" = "Scroll Speed";
++"Scroll Gap" = "Loop Gap";
++"Scroll Direction" = "Scroll Direction";
++"Right to Left" = "Right to Left";
++"Left to Right" = "Left to Right";
++"Scroll Hint" = "The text scrolls inside this widget set's frame. Change the size and position of this widget set to control the visible range.";--- a/layout/Applications/Helium.app/zh-Hans.lproj/Localizable.strings
++++ b/layout/Applications/Helium.app/zh-Hans.lproj/Localizable.strings
+@@ -179,4 +179,14 @@
+ "Weather" = "天气";
+ 
+ /* WeatherUtils.mm */
+-"error" = "出错啦";+"error" = "出错啦";
++
++/* Scrolling Text Widget */
++"Scrolling Text" = "滚动文字";
++"Scrolling Danmaku" = "弹幕文字";
++"Scroll Speed" = "滚动速度";
++"Scroll Gap" = "循环间隔";
++"Scroll Direction" = "滚动方向";
++"Right to Left" = "从右到左";
++"Left to Right" = "从左到右";
++"Scroll Hint" = "文字在本显示位的框内循环滚动，调整该显示位的宽度、高度与位置即可控制能看到范围。";--- /dev/null
++++ b/src/hud/HeliumMarqueeLabel.h
++//
++//  HeliumMarqueeLabel.h
++//  Helium
++//
++//  A UILabel subclass that scrolls its text horizontally inside its own
++//  bounds, like a danmaku / marquee. The scroll window is the label frame
++//  itself, so the visible range is controlled by the widget set's
++//  scale / scaleY / anchor values.
++//
++
++#import <UIKit/UIKit.h>
++
++NS_ASSUME_NONNULL_BEGIN
++
++@interface HeliumMarqueeLabel : UILabel
++
++/// YES when the text should scroll. NO makes the label behave like a normal UILabel.
++@property (nonatomic, assign) BOOL marqueeEnabled;
++/// Scroll speed in points per second.
++@property (nonatomic, assign) CGFloat marqueeSpeed;
++/// Blank gap inserted between two copies of the text.
++@property (nonatomic, assign) CGFloat marqueeGap;
++/// 0 = right to left (default), 1 = left to right.
++@property (nonatomic, assign) NSInteger marqueeDirection;
++
++/// Configure all marquee options at once. Safe to call on every refresh tick.
++- (void)configureMarqueeEnabled:(BOOL)enabled
++                          speed:(CGFloat)speed
++                            gap:(CGFloat)gap
++                      direction:(NSInteger)direction;
++
++/// Restart the shared clock so every label in the HUD starts from the same phase.
+++ (void)resetMarqueeClock;
++
++@end
++
++NS_ASSUME_NONNULL_END--- /dev/null
++++ b/src/hud/HeliumMarqueeLabel.mm
++//
++//  HeliumMarqueeLabel.mm
++//  Helium
++//
++//  Danmaku-style horizontal scroller built on top of UILabel.
++//  The label itself stays a plain fixed-size view, the text is drawn with a
++//  moving offset inside its bounds, so the scrolling window is exactly the
++//  label frame (controlled by the widget set's scale / scaleY / anchor).
++//
++
++#import "HeliumMarqueeLabel.h"
++
++#include <math.h>
++
++/// Shared clock so the label and its mask twin stay in phase.
++static NSTimeInterval gHeliumMarqueeClock = 0;
++
++@implementation HeliumMarqueeLabel {
++    NSTimer *_frameTimer;
++    NSAttributedString *_cachedDrawString;
++    CGSize _cachedDrawSize;
++    NSString *_cachedCacheKey;
++}
++
++#pragma mark - Clock
++
+++ (void)resetMarqueeClock
++{
++    gHeliumMarqueeClock = CACurrentMediaTime();
++}
++
++- (instancetype)initWithFrame:(CGRect)frame
++{
++    self = [super initWithFrame:frame];
++    if (self) {
++        _marqueeEnabled = NO;
++        _marqueeSpeed = 30.0;
++        _marqueeGap = 24.0;
++        _marqueeDirection = 0;
++        _cachedDrawSize = CGSizeZero;
++    }
++    return self;
++}
++
++- (void)dealloc
++{
++    [_frameTimer invalidate];
++    _frameTimer = nil;
++}
++
++#pragma mark - Configuration
++
++- (void)configureMarqueeEnabled:(BOOL)enabled
++                          speed:(CGFloat)speed
++                            gap:(CGFloat)gap
++                      direction:(NSInteger)direction
++{
++    BOOL needsRedraw = NO;
++
++    if (_marqueeEnabled != enabled) {
++        _marqueeEnabled = enabled;
++        needsRedraw = YES;
++    }
++    if (fabs(_marqueeSpeed - speed) > 0.01) {
++        _marqueeSpeed = speed;
++        needsRedraw = YES;
++    }
++    if (fabs(_marqueeGap - gap) > 0.01) {
++        _marqueeGap = gap;
++        needsRedraw = YES;
++    }
++    if (_marqueeDirection != direction) {
++        _marqueeDirection = direction;
++        needsRedraw = YES;
++    }
++
++    if (_marqueeEnabled) {
++        if (gHeliumMarqueeClock <= 0) {
++            gHeliumMarqueeClock = CACurrentMediaTime();
++        }
++        [self startFrameTimer];
++    } else {
++        [self stopFrameTimer];
++    }
++
++    if (needsRedraw) {
++        [self setNeedsDisplay];
++    }
++}
++
++#pragma mark - Frame driver
++
++- (void)startFrameTimer
++{
++    if (_frameTimer) {
++        return;
++    }
++    __weak typeof(self) weakSelf = self;
++    _frameTimer = [NSTimer timerWithTimeInterval:(1.0 / 30.0)
++                                         repeats:YES
++                                           block:^(NSTimer *timer) {
++        HeliumMarqueeLabel *strongSelf = weakSelf;
++        if (!strongSelf) {
++            return;
++        }
++        if (!strongSelf.marqueeEnabled || strongSelf.hidden || strongSelf.window == nil) {
++            return;
++        }
++        [strongSelf setNeedsDisplay];
++    }];
++    [[NSRunLoop mainRunLoop] addTimer:_frameTimer forMode:NSRunLoopCommonModes];
++}
++
++- (void)stopFrameTimer
++{
++    if (!_frameTimer) {
++        return;
++    }
++    [_frameTimer invalidate];
++    _frameTimer = nil;
++}
++
++- (void)didMoveToWindow
++{
++    [super didMoveToWindow];
++    if (self.window && self.marqueeEnabled) {
++        [self startFrameTimer];
++    } else {
++        [self stopFrameTimer];
++    }
++}
++
++#pragma mark - Cache
++
++- (void)invalidateMarqueeCache
++{
++    _cachedDrawString = nil;
++    _cachedCacheKey = nil;
++    _cachedDrawSize = CGSizeZero;
++}
++
++- (void)setText:(NSString *)text
++{
++    [super setText:text];
++    [self invalidateMarqueeCache];
++}
++
++- (void)setAttributedText:(NSAttributedString *)attributedText
++{
++    [super setAttributedText:attributedText];
++    [self invalidateMarqueeCache];
++}
++
++- (void)setFont:(UIFont *)font
++{
++    [super setFont:font];
++    [self invalidateMarqueeCache];
++}
++
++/// Returns the string that should be measured / drawn, with the label font
++/// applied when the attributed string does not carry one.
++- (NSAttributedString *)marqueeDrawString
++{
++    NSAttributedString *attr = self.attributedText;
++    if (attr.length == 0) {
++        return attr;
++    }
++    UIFont *font = self.font ?: [UIFont systemFontOfSize:12.0];
++    NSString *key = [NSString stringWithFormat:@"%lu|%@|%.2f",
++                     (unsigned long)attr.length,
++                     font.fontName ?: @"",
++                     font.pointSize];
++    if (_cachedDrawString && _cachedCacheKey && [_cachedCacheKey isEqualToString:key]) {
++        return _cachedDrawString;
++    }
++
++    NSAttributedString *result = attr;
++    id fontAttribute = [attr attribute:NSFontAttributeName atIndex:0 effectiveRange:NULL];
++    if (!fontAttribute) {
++        NSMutableAttributedString *copy = [attr mutableCopy];
++        [copy addAttribute:NSFontAttributeName value:font range:NSMakeRange(0, copy.length)];
++        result = copy;
++    }
++
++    CGRect bounds = [result boundingRectWithSize:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)
++                                         options:(NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading)
++                                         context:nil];
++    _cachedDrawSize = CGSizeMake(ceil(bounds.size.width) + 2.0, ceil(bounds.size.height));
++    _cachedDrawString = result;
++    _cachedCacheKey = key;
++    return result;
++}
++
++#pragma mark - Drawing
++
++- (void)drawTextInRect:(CGRect)rect
++{
++    NSAttributedString *attr = self.attributedText;
++    if (!self.marqueeEnabled || attr.length == 0) {
++        [super drawTextInRect:rect];
++        return;
++    }
++
++    NSAttributedString *drawString = [self marqueeDrawString];
++    CGSize contentSize = _cachedDrawSize;
++    if (contentSize.width <= 0 || rect.size.width <= 0) {
++        [super drawTextInRect:rect];
++        return;
++    }
++
++    // Text fits entirely -> nothing to scroll, keep native rendering.
++    if (contentSize.width <= rect.size.width + 0.5) {
++        [super drawTextInRect:rect];
++        return;
++    }
++
++    CGFloat gap = MAX(self.marqueeGap, 0.0);
++    CGFloat period = contentSize.width + gap;
++    if (period <= 0) {
++        [super drawTextInRect:rect];
++        return;
++    }
++
++    if (gHeliumMarqueeClock <= 0) {
++        gHeliumMarqueeClock = CACurrentMediaTime();
++    }
++    NSTimeInterval elapsed = CACurrentMediaTime() - gHeliumMarqueeClock;
++    if (elapsed < 0) {
++        elapsed = 0;
++    }
++
++    CGFloat speed = MAX(self.marqueeSpeed, 1.0);
++    CGFloat offset = (CGFloat)fmod((double)speed * (double)elapsed, (double)period);
++
++    CGFloat startX = (self.marqueeDirection == 1) ? (offset - period) : (-offset);
++    CGFloat y = rect.origin.y + (rect.size.height - contentSize.height) * 0.5;
++    if (y < rect.origin.y) {
++        y = rect.origin.y;
++    }
++
++    CGFloat rightEdge = rect.origin.x + rect.size.width;
++    CGFloat x = rect.origin.x + startX;
++    NSInteger guard = 0;
++    while (x < rightEdge && guard < 64) {
++        @autoreleasepool {
++            [drawString drawAtPoint:CGPointMake(x, y)];
++        }
++        x += period;
++        guard++;
++    }
++}
++
++@end
