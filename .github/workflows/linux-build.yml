@@ -1,0 +1,80 @@
+name: Linux Theos build
+
+on:
+  push:
+    branches:
+      - "ci/linux"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: swift:5.9-jammy
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            make git curl unzip xz-utils libplist-dev libssl-dev libstdc++-12-dev \
+            clang lld pkg-config zlib1g-dev
+
+      - name: Build ldid
+        run: |
+          git clone --depth 1 https://github.com/ProcursusTeam/ldid.git /tmp/ldid
+          cd /tmp/ldid
+          git submodule update --init --depth 1 || true
+          make -j"$(nproc)" CXXFLAGS="-std=c++17"
+          install -m 0755 ldid /usr/local/bin/ldid
+          ldid -h | head -3 || true
+
+      - name: Checkout Helium
+        uses: actions/checkout@v4
+        with:
+          path: Helium
+
+      - name: Setup Theos and SDKs
+        run: |
+          git clone --recursive --depth 1 https://github.com/theos/theos.git /opt/theos
+          git clone --depth 1 https://github.com/theos/sdks.git /opt/theos/sdks
+          ls /opt/theos/sdks | head -20
+          echo "THEOS=/opt/theos" >> "$GITHUB_ENV"
+
+      - name: Show toolchain versions
+        run: |
+          swift --version
+          clang --version | head -2
+          which ldid
+
+      - name: Build
+        run: |
+          export THEOS=/opt/theos
+          export PATH="$THEOS/bin:$PATH"
+          cd Helium
+          make clean || true
+          make FINALPACKAGE=1 -j"$(nproc)" 2>&1 | tail -120
+
+      - name: Assemble tipa
+        if: success()
+        run: |
+          cd Helium
+          APP_DIR=$(find .theos/obj -maxdepth 2 -name "Helium.app" -type d | head -1)
+          echo "app dir: $APP_DIR"
+          SRC=layout/Applications/Helium.app
+          cp "$SRC/icon.png" "$SRC/Info.plist" "$SRC/Assets.car" "$APP_DIR/"
+          cp -r "$SRC/en.lproj" "$SRC/zh-Hans.lproj" "$SRC/fonts" "$SRC/credits" "$APP_DIR/"
+          mkdir -p build/Payload
+          cp -r "$APP_DIR" build/Payload/Helium.app
+          cd build
+          zip -qry Helium.tipa Payload
+          ls -l Helium.tipa
+
+      - name: Upload artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Helium-linux.tipa
+          path: ${{ github.workspace }}/Helium/build/Helium.tipa
+          if-no-files-found: error
