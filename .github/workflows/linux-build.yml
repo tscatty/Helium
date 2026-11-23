@@ -49,13 +49,28 @@ jobs:
           clang --version | head -2
           which ldid
 
+      - name: Link theos toolchain paths to the host toolchain
+        run: |
+          mkdir -p /opt/theos/toolchain/linux/iphone/bin
+          ln -sf "$(command -v swiftc)" /opt/theos/toolchain/linux/iphone/bin/swiftc
+          ln -sf "$(command -v clang)" /opt/theos/toolchain/linux/iphone/bin/clang
+          ln -sf "$(command -v clang++)" /opt/theos/toolchain/linux/iphone/bin/clang++
+          for cand in ld64.lld ld64 ld.lld; do
+            if command -v "$cand" >/dev/null 2>&1; then
+              ln -sf "$(command -v "$cand")" /opt/theos/toolchain/linux/iphone/bin/ld64
+              echo "ld64 -> $cand"
+              break
+            fi
+          done
+          ls -l /opt/theos/toolchain/linux/iphone/bin
+
       - name: Build
         run: |
           export THEOS=/opt/theos
           export PATH="$THEOS/bin:$PATH"
           cd Helium
           make clean || true
-          make FINALPACKAGE=1 -j"$(nproc)" 2>&1 | tail -120
+          make FINALPACKAGE=1 -j"$(nproc)"             TARGET_CC="$(command -v clang)"             TARGET_CXX="$(command -v clang++)"             TARGET_LD="$(command -v clang++)" 2>&1 | tail -150
 
       - name: Assemble tipa
         if: success()
