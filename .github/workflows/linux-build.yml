@@ -19,7 +19,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             make git curl unzip xz-utils libplist-dev libssl-dev libstdc++-12-dev \
-            clang lld pkg-config zlib1g-dev
+            clang lld g++ pkg-config zlib1g-dev
 
       - name: Build ldid
         run: |
