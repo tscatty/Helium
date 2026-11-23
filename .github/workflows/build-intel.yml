@@ -57,19 +57,16 @@ jobs:
         run: |
           STUB="$RUNNER_TEMP/private-stubs"
           mkdir -p "$STUB"
+          printf 'int helium_private_stub = 0;
+' > "$RUNNER_TEMP/stub.c"
+          SDKPATH="$(xcrun --sdk iphoneos --show-sdk-path)"
           for FW in BackBoardServices GraphicsServices SpringBoardServices; do
             mkdir -p "$STUB/$FW.framework"
-            cat > "$STUB/$FW.framework/$FW.tbd" <<EOF
-          --- !tapi-tbd
-          tbd-version: 4
-          targets: [ arm64-ios, arm64e-ios ]
-          install-name: '/System/Library/PrivateFrameworks/$FW.framework/$FW'
-          current-version: 1
-          compatibility-version: 1
-          EOF
+            xcrun --sdk iphoneos clang -target arm64-apple-ios14.0 -arch arm64e               -dynamiclib -x c "$RUNNER_TEMP/stub.c"               -isysroot "$SDKPATH" -o "$STUB/$FW.framework/$FW"               -install_name "/System/Library/PrivateFrameworks/$FW.framework/$FW"
+            lipo -info "$STUB/$FW.framework/$FW" || true
           done
           echo "STUB=$STUB" >> $GITHUB_ENV
-          find "$STUB" -type f
+          ls -l "$STUB"/*/*
 
       - name: Build
         run: |
