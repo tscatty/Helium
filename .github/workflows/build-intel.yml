@@ -35,17 +35,20 @@ jobs:
           path: theos
           submodules: recursive
 
-      - name: Use the SDK shipped with Xcode (matches the Swift 6 compiler)
+      - name: Use the SDK shipped with Xcode
         run: |
           echo "THEOS=$GITHUB_WORKSPACE/theos" >> $GITHUB_ENV
           rm -rf "$GITHUB_WORKSPACE/theos/sdks"
           mkdir -p "$GITHUB_WORKSPACE/theos/sdks"
           DEV=$(xcode-select -p)
           SDK_VER=$(xcrun --sdk iphoneos --show-sdk-version)
-          SDK_DIR=$(ls -d "$DEV"/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS${SDK_VER}.sdk 2>/dev/null || ls -d "$DEV"/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk)
+          SDK_DIR="$DEV/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS${SDK_VER}.sdk"
+          if [ ! -d "$SDK_DIR" ]; then
+            SDK_DIR="$DEV/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
+          fi
           ln -s "$SDK_DIR" "$GITHUB_WORKSPACE/theos/sdks/iPhoneOS${SDK_VER}.sdk"
-          ls -l "$GITHUB_WORKSPACE/theos/sdks"
           echo "SDK_VER=$SDK_VER" >> $GITHUB_ENV
+          ls -l "$GITHUB_WORKSPACE/theos/sdks"
           xcrun --sdk iphoneos --show-sdk-version
 
       - name: Checkout Helium
@@ -57,12 +60,15 @@ jobs:
         run: |
           STUB="$RUNNER_TEMP/private-stubs"
           mkdir -p "$STUB"
-          printf 'int helium_private_stub = 0;
-' > "$RUNNER_TEMP/stub.c"
-          SDKPATH="$(xcrun --sdk iphoneos --show-sdk-path)"
-          for FW in BackBoardServices GraphicsServices SpringBoardServices; do
+          echo 'int helium_private_stub = 0;' > "$RUNNER_TEMP/stub.c"
+          SDKPATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          for FW in BackBoardServices GraphicsServices SpringBoardServices
+          do
             mkdir -p "$STUB/$FW.framework"
-            xcrun --sdk iphoneos clang -target arm64-apple-ios14.0 -arch arm64e               -dynamiclib -x c "$RUNNER_TEMP/stub.c"               -isysroot "$SDKPATH" -o "$STUB/$FW.framework/$FW"               -install_name "/System/Library/PrivateFrameworks/$FW.framework/$FW"
+            xcrun --sdk iphoneos clang -target arm64-apple-ios14.0 -arch arm64e -arch arm64 \
+              -dynamiclib -x c "$RUNNER_TEMP/stub.c" -isysroot "$SDKPATH" \
+              -o "$STUB/$FW.framework/$FW" \
+              -install_name "/System/Library/PrivateFrameworks/$FW.framework/$FW"
             lipo -info "$STUB/$FW.framework/$FW" || true
           done
           echo "STUB=$STUB" >> $GITHUB_ENV
@@ -75,7 +81,7 @@ jobs:
           export PATH="$THEOS/bin:$PATH"
           cd $GITHUB_WORKSPACE/Helium
           make clean || true
-          make FINALPACKAGE=1 -j3             TARGET="iphone:clang:${SDK_VER}:14.0"             Helium_LDFLAGS="-F$STUB -Wl,-undefined,dynamic_lookup"
+          make FINALPACKAGE=1 -j3 TARGET="iphone:clang:${SDK_VER}:14.0" Helium_LDFLAGS="-F$STUB -Wl,-undefined,dynamic_lookup"
           find .theos/obj -maxdepth 2 -name "Helium.app" -type d
 
       - name: Assemble tipa
@@ -85,14 +91,16 @@ jobs:
           echo "app: $APP_DIR"
           SRC=layout/Applications/Helium.app
           cp "$SRC/icon.png" "$SRC/Info.plist" "$SRC/Assets.car" "$APP_DIR/"
-          cp -r "$SRC/en.lproj" "$SRC/zh-Hans.lproj" "$SRC/fonts" "$SRC/credits" "$APP_DIR/"
+          cp -R "$SRC/en.lproj" "$SRC/zh-Hans.lproj" "$SRC/fonts" "$SRC/credits" "$APP_DIR/"
           mkdir -p build/Payload
           rm -rf build/Payload/Helium.app
-          cp -r "$APP_DIR" build/Payload/Helium.app
+          cp -R "$APP_DIR" build/Payload/Helium.app
+          test -f build/Payload/Helium.app/Helium
+          file build/Payload/Helium.app/Helium
           cd build
           zip -qry Helium.tipa Payload
           ls -l Helium.tipa
-          unzip -l Helium.tipa | head -12
+          unzip -l Helium.tipa | head -14
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
