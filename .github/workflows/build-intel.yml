@@ -1,0 +1,65 @@
+name: Build Helium (macos-15-intel)
+
+on:
+  push:
+    branches:
+      - "scrolltext"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+
+    steps:
+      - name: Show toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Install Homebrew dependencies
+        run: |
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install dpkg ldid make libplist openssl@3
+          echo "/usr/local/opt/make/libexec/gnubin" >> $GITHUB_PATH
+
+      - name: Checkout theos
+        uses: actions/checkout@v4
+        with:
+          repository: XXTouchNG/theos
+          ref: 78ee784d8d3238982c9abdc58cd39919263648b1
+          path: theos
+          submodules: recursive
+
+      - name: Add THEOS environment variables
+        run: |
+          rm -rf $GITHUB_WORKSPACE/theos/sdks
+          echo "THEOS=$GITHUB_WORKSPACE/theos" >> $GITHUB_ENV
+
+      - name: Checkout theos/sdks
+        uses: actions/checkout@v4
+        with:
+          repository: theos/sdks
+          ref: master
+          path: ${{ github.workspace }}/theos/sdks
+
+      - name: Checkout Helium
+        uses: actions/checkout@v4
+        with:
+          path: Helium
+          submodules: recursive
+
+      - name: Build tipa
+        run: |
+          cd $GITHUB_WORKSPACE/Helium
+          chmod +x ipabuild.sh
+          ls $THEOS/sdks | head -20
+          ./ipabuild.sh
+          ls -l build/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Helium-scrolltext.tipa
+          path: ${{ github.workspace }}/Helium/build/Helium.tipa
+          if-no-files-found: error
