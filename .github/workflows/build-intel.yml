@@ -57,7 +57,7 @@ jobs:
         run: |
           STUB="$RUNNER_TEMP/private-stubs"
           mkdir -p "$STUB"
-          for FW in BackBoardServices; do
+          for FW in BackBoardServices GraphicsServices SpringBoardServices; do
             mkdir -p "$STUB/$FW.framework"
             cat > "$STUB/$FW.framework/$FW.tbd" <<EOF
           --- !tapi-tbd
