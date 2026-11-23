@@ -11,12 +11,16 @@ jobs:
     runs-on: macos-15-intel
 
     steps:
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.2'
+
       - name: Show toolchain
         run: |
           sw_vers
-          uname -m
           xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
+          swift --version
 
       - name: Install Homebrew dependencies
         run: |
@@ -31,31 +35,48 @@ jobs:
           path: theos
           submodules: recursive
 
-      - name: Add THEOS environment variables
+      - name: Use the SDK shipped with Xcode (matches the Swift 6 compiler)
         run: |
-          rm -rf $GITHUB_WORKSPACE/theos/sdks
           echo "THEOS=$GITHUB_WORKSPACE/theos" >> $GITHUB_ENV
-
-      - name: Checkout theos/sdks
-        uses: actions/checkout@v4
-        with:
-          repository: theos/sdks
-          ref: master
-          path: ${{ github.workspace }}/theos/sdks
+          rm -rf "$GITHUB_WORKSPACE/theos/sdks"
+          mkdir -p "$GITHUB_WORKSPACE/theos/sdks"
+          DEV=$(xcode-select -p)
+          SDK_DIR=$(ls -d "$DEV"/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS*.sdk | head -1)
+          SDK_VER=$(basename "$SDK_DIR" | sed 's/^iPhoneOS//; s/\.sdk$//')
+          ln -s "$SDK_DIR" "$GITHUB_WORKSPACE/theos/sdks/iPhoneOS${SDK_VER}.sdk"
+          ls -l "$GITHUB_WORKSPACE/theos/sdks"
+          echo "SDK_VER=$SDK_VER" >> $GITHUB_ENV
+          xcrun --sdk iphoneos --show-sdk-version
 
       - name: Checkout Helium
         uses: actions/checkout@v4
         with:
           path: Helium
-          submodules: recursive
 
-      - name: Build tipa
+      - name: Build
+        run: |
+          export THEOS=$GITHUB_WORKSPACE/theos
+          export PATH="$THEOS/bin:$PATH"
+          cd $GITHUB_WORKSPACE/Helium
+          make clean || true
+          make FINALPACKAGE=1 -j3 TARGET="iphone:clang:${SDK_VER}:14.0" 2>&1 | tail -200
+          find .theos/obj -maxdepth 2 -name "Helium.app" -type d
+
+      - name: Assemble tipa
         run: |
           cd $GITHUB_WORKSPACE/Helium
-          chmod +x ipabuild.sh
-          ls $THEOS/sdks | head -20
-          ./ipabuild.sh
-          ls -l build/
+          APP_DIR=$(find .theos/obj -maxdepth 2 -name "Helium.app" -type d | head -1)
+          echo "app: $APP_DIR"
+          SRC=layout/Applications/Helium.app
+          cp "$SRC/icon.png" "$SRC/Info.plist" "$SRC/Assets.car" "$APP_DIR/"
+          cp -r "$SRC/en.lproj" "$SRC/zh-Hans.lproj" "$SRC/fonts" "$SRC/credits" "$APP_DIR/"
+          mkdir -p build/Payload
+          rm -rf build/Payload/Helium.app
+          cp -r "$APP_DIR" build/Payload/Helium.app
+          cd build
+          zip -qry Helium.tipa Payload
+          ls -l Helium.tipa
+          unzip -l Helium.tipa | head -12
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
