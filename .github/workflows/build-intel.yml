@@ -41,8 +41,8 @@ jobs:
           rm -rf "$GITHUB_WORKSPACE/theos/sdks"
           mkdir -p "$GITHUB_WORKSPACE/theos/sdks"
           DEV=$(xcode-select -p)
-          SDK_DIR=$(ls -d "$DEV"/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS*.sdk | head -1)
-          SDK_VER=$(basename "$SDK_DIR" | sed 's/^iPhoneOS//; s/\.sdk$//')
+          SDK_VER=$(xcrun --sdk iphoneos --show-sdk-version)
+          SDK_DIR=$(ls -d "$DEV"/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS${SDK_VER}.sdk 2>/dev/null || ls -d "$DEV"/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk)
           ln -s "$SDK_DIR" "$GITHUB_WORKSPACE/theos/sdks/iPhoneOS${SDK_VER}.sdk"
           ls -l "$GITHUB_WORKSPACE/theos/sdks"
           echo "SDK_VER=$SDK_VER" >> $GITHUB_ENV
@@ -53,13 +53,32 @@ jobs:
         with:
           path: Helium
 
+      - name: Stub private frameworks missing from the modern SDK
+        run: |
+          STUB="$RUNNER_TEMP/private-stubs"
+          mkdir -p "$STUB"
+          for FW in BackBoardServices; do
+            mkdir -p "$STUB/$FW.framework"
+            cat > "$STUB/$FW.framework/$FW.tbd" <<EOF
+          --- !tapi-tbd
+          tbd-version: 4
+          targets: [ arm64-ios, arm64e-ios ]
+          install-name: '/System/Library/PrivateFrameworks/$FW.framework/$FW'
+          current-version: 1
+          compatibility-version: 1
+          EOF
+          done
+          echo "STUB=$STUB" >> $GITHUB_ENV
+          find "$STUB" -type f
+
       - name: Build
         run: |
+          set -o pipefail
           export THEOS=$GITHUB_WORKSPACE/theos
           export PATH="$THEOS/bin:$PATH"
           cd $GITHUB_WORKSPACE/Helium
           make clean || true
-          make FINALPACKAGE=1 -j3 TARGET="iphone:clang:${SDK_VER}:14.0" 2>&1 | tail -200
+          make FINALPACKAGE=1 -j3             TARGET="iphone:clang:${SDK_VER}:14.0"             Helium_LDFLAGS="-F$STUB -Wl,-undefined,dynamic_lookup"
           find .theos/obj -maxdepth 2 -name "Helium.app" -type d
 
       - name: Assemble tipa
