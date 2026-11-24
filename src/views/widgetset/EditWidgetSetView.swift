@@ -216,7 +216,7 @@ struct EditWidgetSetView: View {
                                     .bold()
                                 Spacer()
                             }
-                            BetterSlider(value: $scale, bounds: 10...500)
+                            BetterSlider(value: $scale, bounds: 10...10000)
                                 .onChange(of: scale) { _ in
                                     changesMade = true
                                 }
@@ -227,7 +227,7 @@ struct EditWidgetSetView: View {
                                     .bold()
                                 Spacer()
                             }
-                            BetterSlider(value: $scaleY, bounds: 5...500)
+                            BetterSlider(value: $scaleY, bounds: 5...2000)
                                 .onChange(of: scaleY) { _ in
                                     changesMade = true
                                 }

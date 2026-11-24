@@ -17,13 +17,20 @@ struct WidgetPreferencesView: View {
     @State var weatherFormat: String = ""
     @State var intSelection: Int = 0
     @State var intSelection2: Int = 0
-    @State var intSelection3: Int = 1
-@State var boolSelection: Bool = false
+@State var intSelection3: Int = 1
+    @State var boolSelection: Bool = false
 
     // MARK: Scrolling text
     @State var scrollSpeed: Double = 30.0
     @State var scrollGap: Double = 24.0
     @State var scrollDirection: Int = 0
+
+    // MARK: Floating image
+    @State var imageFile: String = ""
+    @State var imagePreview: UIImage? = nil
+    @State var imageContentModeSel: Int = 0
+    @State var imageCornerRadius: Double = 0.0
+    @State var imageCircular: Bool = false
 
     @State var modified: Bool = false
     @State private var isPresented = false
@@ -302,7 +309,7 @@ struct WidgetPreferencesView: View {
                             Text(NSLocalizedString("Scroll Speed", comment:""))
                                 .foregroundColor(.primary)
                                 .bold()
-                            Slider(value: $scrollSpeed, in: 5...150, step: 5)
+                            Slider(value: $scrollSpeed, in: 5...1200, step: 5)
                             Text("\(Int(scrollSpeed)) pt/s")
                                 .foregroundColor(.secondary)
                                 .frame(width: 70, alignment: .trailing)
@@ -333,6 +340,71 @@ struct WidgetPreferencesView: View {
                     scrollSpeed = widgetID.config["speed"] as? Double ?? 30.0
                     scrollGap = widgetID.config["gap"] as? Double ?? 24.0
                     scrollDirection = widgetID.config["direction"] as? Int ?? 0
+                }
+            case .imageWidget:
+                // MARK: Floating Image Settings
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack {
+                        HStack {
+                            Text(NSLocalizedString("Picture", comment:""))
+                                .foregroundColor(.primary)
+                                .bold()
+                            Spacer()
+                            Button(action: { isPresented = true }) {
+                                Text(imageFile.isEmpty
+                                     ? NSLocalizedString("Choose Picture", comment:"")
+                                     : NSLocalizedString("Change Picture", comment:""))
+                            }
+                        }
+                        if let preview = imagePreview {
+                            Image(uiImage: preview)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxHeight: 120)
+                                .cornerRadius(imageCircular ? 60 : imageCornerRadius)
+                                .clipped()
+                        }
+                        Picker(selection: $imageContentModeSel, label: Text(NSLocalizedString("Picture Scaling", comment:"")).foregroundColor(.primary).bold()) {
+                            Text(NSLocalizedString("Fill Frame", comment:"")).tag(0)
+                            Text(NSLocalizedString("Fit Frame", comment:"")).tag(1)
+                        }
+                        HStack {
+                            Text(NSLocalizedString("Corner Radius", comment:""))
+                                .foregroundColor(.primary)
+                                .bold()
+                            Slider(value: $imageCornerRadius, in: 0...80, step: 2)
+                                .disabled(imageCircular)
+                            Text(imageCircular ? NSLocalizedString("Circle", comment:"") : "\(Int(imageCornerRadius)) pt")
+                                .foregroundColor(.secondary)
+                                .frame(width: 70, alignment: .trailing)
+                        }
+                        Toggle(isOn: $imageCircular) {
+                            Text(NSLocalizedString("Circle", comment:""))
+                                .foregroundColor(.primary)
+                                .bold()
+                        }
+                        HStack {
+                            Text(NSLocalizedString("Picture Hint", comment:""))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                        }
+                    }
+                }
+                .onAppear {
+                    imageFile = widgetID.config["imageFile"] as? String ?? ""
+                    imagePreview = imageFile.isEmpty ? nil : HeliumImageStore.load(imageFile)
+                    imageContentModeSel = widgetID.config["contentMode"] as? Int ?? 0
+                    imageCornerRadius = widgetID.config["cornerRadius"] as? Double ?? 0.0
+                    imageCircular = widgetID.config["circular"] as? Bool ?? false
+                }
+                .sheet(isPresented: $isPresented) {
+                    PhotoPickerView(onPick: { picked in
+                        guard let picked = picked, let saved = HeliumImageStore.save(picked) else { return }
+                        imageFile = saved
+                        imagePreview = HeliumImageStore.load(saved)
+                        modified = true
+                    })
                 }
             // default:
             //     Text(NSLocalizedString("No Configurable Aspects", comment:""))
@@ -384,6 +456,15 @@ struct WidgetPreferencesView: View {
             modified = true
         }
         .onChange(of: scrollDirection) { _ in
+            modified = true
+        }
+        .onChange(of: imageContentModeSel) { _ in
+            modified = true
+        }
+        .onChange(of: imageCornerRadius) { _ in
+            modified = true
+        }
+        .onChange(of: imageCircular) { _ in
             modified = true
         }
     }
@@ -449,6 +530,16 @@ struct WidgetPreferencesView: View {
             widgetStruct.config["speed"] = scrollSpeed
             widgetStruct.config["gap"] = scrollGap
             widgetStruct.config["direction"] = scrollDirection
+        case .imageWidget:
+            // MARK: Floating Image Handling
+            if imageFile.isEmpty {
+                widgetStruct.config["imageFile"] = nil
+            } else {
+                widgetStruct.config["imageFile"] = imageFile
+            }
+            widgetStruct.config["contentMode"] = imageContentModeSel
+            widgetStruct.config["cornerRadius"] = imageCornerRadius
+            widgetStruct.config["circular"] = imageCircular
         case .weather:
             // MARK: Weather Handling
             if text == "" {

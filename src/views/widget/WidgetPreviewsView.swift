@@ -99,6 +99,18 @@ struct WidgetPreviewsView: View {
             image = nil
             let scrollText: String = widget.config["text"] as? String ?? ""
             text = scrollText == "" ? NSLocalizedString("Scrolling Danmaku", comment:"") : scrollText
+        case .imageWidget:
+            let file: String = widget.config["imageFile"] as? String ?? ""
+            if file.isEmpty {
+                image = nil
+                text = NSLocalizedString("Picture Preview", comment:"")
+            } else if let ui = HeliumImageStore.load(file) {
+                text = ""
+                image = Image(uiImage: ui)
+            } else {
+                image = nil
+                text = NSLocalizedString("Picture Preview", comment:"")
+            }
         }
         widget.modified = false
     }

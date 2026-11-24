@@ -190,3 +190,15 @@
 "Right to Left" = "从右到左";
 "Left to Right" = "从左到右";
 "Scroll Hint" = "文字在本显示位的框内循环滚动，调整该显示位的宽度、高度与位置即可控制能看到范围。";
+
+/* Floating Image Widget */
+"Picture" = "图片";
+"Picture Preview" = "图片";
+"Choose Picture" = "选择";
+"Change Picture" = "更换";
+"Picture Scaling" = "缩放方式";
+"Fill Frame" = "填满显示位";
+"Fit Frame" = "适应显示位";
+"Corner Radius" = "圆角";
+"Circle" = "圆形";
+"Picture Hint" = "图片填在本显示位的框内。调整该显示位的宽度、高度与位置即可改变图片大小和位置。";

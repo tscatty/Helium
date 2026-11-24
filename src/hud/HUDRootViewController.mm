@@ -4,6 +4,7 @@
 #import "HUDRootViewController.h"
 #import "AnyBackdropView.h"
 #import "HeliumMarqueeLabel.h"
+#import "HeliumImageView.h"
 #import "Helium-Swift.h"
 
 #import "../widgets/WidgetManager.h"
@@ -41,8 +42,33 @@ static NSDictionary *ScrollConfigForProperties(NSDictionary *properties)
         if (![widget isKindOfClass:[NSDictionary class]]) {
             continue;
         }
-        NSNumber *widgetID = [widget objectForKey:@"widgetID"];
+NSNumber *widgetID = [widget objectForKey:@"widgetID"];
         if (widgetID && [widgetID integerValue] == kScrollTextWidgetID) {
+            return widget;
+        }
+    }
+    return nil;
+}
+
+// MARK: Floating image support
+// Keep in sync with WidgetModule.imageWidget in WidgetManager.swift
+static const NSInteger kImageWidgetID = 12;
+
+static NSDictionary *ImageConfigForProperties(NSDictionary *properties)
+{
+    if (![properties isKindOfClass:[NSDictionary class]]) {
+        return nil;
+    }
+    NSArray *widgetIDs = [properties objectForKey:@"widgetIDs"];
+    if (![widgetIDs isKindOfClass:[NSArray class]]) {
+        return nil;
+    }
+    for (id widget in widgetIDs) {
+        if (![widget isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+        NSNumber *widgetID = [widget objectForKey:@"widgetID"];
+        if (widgetID && [widgetID integerValue] == kImageWidgetID) {
             return widget;
         }
     }
@@ -134,8 +160,10 @@ static void ReloadHUD
     NSMutableArray <UIVisualEffectView *> *_blurViews;
     NSMutableArray <UILabel *> *_labelViews;
     
-    NSMutableArray <AnyBackdropView *> *_backdropViews;
+NSMutableArray <AnyBackdropView *> *_backdropViews;
     NSMutableArray <UILabel *> *_maskLabelViews;
+
+    NSMutableArray <HeliumImageView *> *_imageViews;
 
     UIView *_contentView;
     
@@ -207,12 +235,13 @@ static void ReloadHUD
         [_verticalLine setHidden:YES];
     }
 
-    NSArray *widgetProps = [self widgetProperties];
+NSArray *widgetProps = [self widgetProperties];
     for (int i = 0; i < [widgetProps count]; i++) {
         UIVisualEffectView *blurView = [_blurViews objectAtIndex:i];
         UILabel *labelView = [_labelViews objectAtIndex:i];
         AnyBackdropView *backdropView = [_backdropViews objectAtIndex: i];
         UILabel *maskLabelView = [_maskLabelViews objectAtIndex:i];
+        HeliumImageView *imageView = (i < [_imageViews count]) ? [_imageViews objectAtIndex:i] : nil;
 
         NSDictionary *properties = [widgetProps objectAtIndex:i];
         NSInteger orientationMode = getIntFromDictKey(properties, @"orientationMode", 0);
@@ -266,12 +295,36 @@ static void ReloadHUD
             }
         }
 
+// MARK: Floating image
+        // A widget set that contains the image widget shows the picture instead
+        // of the text stack, so labels / backdrop / blur are all suppressed.
+        BOOL imageSlotEnabled = getBoolFromDictKey(properties, @"isEnabled");
+        NSDictionary *imageConfig = imageSlotEnabled ? ImageConfigForProperties(properties) : nil;
+        if (imageView) {
+            NSString *imageFile = imageConfig ? getStringFromDictKey(imageConfig, @"imageFile", @"") : @"";
+            if (imageConfig && imageFile.length > 0) {
+                [imageView configureWithFile:imageFile
+                                 contentMode:(HeliumImageContentMode)getIntFromDictKey(imageConfig, @"contentMode", 0)
+                                cornerRadius:getDoubleFromDictKey(imageConfig, @"cornerRadius", 0.0)
+                                    circular:getBoolFromDictKey(imageConfig, @"circular", NO)];
+                [imageView setHidden:NO];
+                [labelView setHidden:YES];
+                [maskLabelView setHidden:YES];
+                [backdropView setHidden:YES];
+                [blurView setEffect:nil];
+                [blurView setHidden:YES];
+            } else {
+                [imageView setHidden:YES];
+            }
+        }
+
         if ((orientationMode == 1 && [self isLandscapeOrientation])
             || (orientationMode == 2 && ![self isLandscapeOrientation])) {
             [blurView setHidden:YES];
             [labelView setHidden:YES];
             [backdropView setHidden:YES];
             [maskLabelView setHidden:YES];
+            [imageView setHidden:YES];
         }
 
         if ([self debugBorder]) {
@@ -338,8 +391,9 @@ static void ReloadHUD
         _constraints = [NSMutableArray array];
         _blurViews = [NSMutableArray array];
         _labelViews = [NSMutableArray array];
-        _backdropViews = [NSMutableArray array];
+_backdropViews = [NSMutableArray array];
         _maskLabelViews = [NSMutableArray array];
+        _imageViews = [NSMutableArray array];
         _orientationObserver = [[objc_getClass("FBSOrientationObserver") alloc] init];
         __weak HUDRootViewController *weakSelf = self;
         [_orientationObserver setHandler:^(FBSOrientationUpdate *orientationUpdate) {
@@ -414,6 +468,11 @@ static void ReloadHUD
         BOOL autoResizes = getBoolFromDictKey(properties, @"autoResizes");
         float width = getDoubleFromDictKey(properties, @"scale", 50.0);
         float height = getDoubleFromDictKey(properties, @"scaleY", 12.0);
+// The image widget is static: it never needs the text refresh timer.
+        if (ImageConfigForProperties(properties) != nil) {
+            [[EZTimer shareInstance] cancel:[NSString stringWithFormat:@"labelview%d", i]];
+            continue;
+        }
         NSDictionary *scrollConfig = ScrollConfigForProperties(properties);
         if (isEnabled) {
             [[EZTimer shareInstance] timer:[NSString stringWithFormat:@"labelview%d", i] timerInterval:updateInterval leeway:0.1 resumeType:EZTimerResumeTypeNow queue:EZTimerQueueTypeConcurrent queueName:@"update" repeats:YES action:^(NSString *timerName) {
@@ -542,8 +601,15 @@ static void ReloadHUD
         maskLabel.translatesAutoresizingMaskIntoConstraints = NO;
         maskLabel.layer.borderColor = [UIColor redColor].CGColor;
         [maskLabel setContentHuggingPriority:UILayoutPriorityDefaultHigh forAxis:UILayoutConstraintAxisVertical];
-        [backdropView setMaskView:maskLabel];
+[backdropView setMaskView:maskLabel];
         [_maskLabelViews addObject:maskLabel];
+
+        // create the floating image view (hidden unless the set contains one)
+        HeliumImageView *imageView = [[HeliumImageView alloc] initWithFrame:CGRectZero];
+        imageView.translatesAutoresizingMaskIntoConstraints = NO;
+        [imageView setHidden:YES];
+        [_contentView addSubview:imageView];
+        [_imageViews addObject:imageView];
     }
 }
 
@@ -661,8 +727,10 @@ static void ReloadHUD
         }
 
         // set the width
-        // Scrolling text always keeps a fixed frame so the text can be clipped.
-        if (!getBoolFromDictKey(properties, @"autoResizes") || ScrollConfigForProperties(properties) != nil) {
+// Scrolling text and images always keep a fixed frame so they can be clipped.
+        if (!getBoolFromDictKey(properties, @"autoResizes")
+            || ScrollConfigForProperties(properties) != nil
+            || ImageConfigForProperties(properties) != nil) {
             [_constraints addObject:[labelView.widthAnchor constraintEqualToConstant:getDoubleFromDictKey(properties, @"scale", 50.0)]];
             [_constraints addObject:[labelView.heightAnchor constraintEqualToConstant:getDoubleFromDictKey(properties, @"scaleY", 12.0)]];
         }
@@ -674,11 +742,31 @@ static void ReloadHUD
             [blurView.bottomAnchor constraintEqualToAnchor:backdropView.bottomAnchor constant:2],
         ]];
         
-        [_constraints addObjectsFromArray:@[
+[_constraints addObjectsFromArray:@[
             [blurView.topAnchor constraintEqualToAnchor:labelView.topAnchor constant:-2],
             [blurView.leadingAnchor constraintEqualToAnchor:labelView.leadingAnchor constant:-4],
             [blurView.trailingAnchor constraintEqualToAnchor:labelView.trailingAnchor constant:4],
             [blurView.bottomAnchor constraintEqualToAnchor:labelView.bottomAnchor constant:2],
+        ]];
+    }
+
+    // The image view shares the label frame, so the size / anchor / offset
+    // settings of the widget set apply to the picture unchanged.
+    for (int i = 0; i < [widgetProps count] && i < [_imageViews count]; i++) {
+        HeliumImageView *imageView = [_imageViews objectAtIndex:i];
+        UILabel *labelView = [_labelViews objectAtIndex:i];
+        NSDictionary *properties = [widgetProps objectAtIndex:i];
+        if (!imageView || !labelView || !properties) {
+            continue;
+        }
+        if (!getBoolFromDictKey(properties, @"isEnabled")) {
+            continue;
+        }
+        [_constraints addObjectsFromArray:@[
+            [imageView.topAnchor constraintEqualToAnchor:labelView.topAnchor],
+            [imageView.leadingAnchor constraintEqualToAnchor:labelView.leadingAnchor],
+            [imageView.trailingAnchor constraintEqualToAnchor:labelView.trailingAnchor],
+            [imageView.bottomAnchor constraintEqualToAnchor:labelView.bottomAnchor],
         ]];
     }
 
@@ -730,8 +818,9 @@ static inline CGRect orientationBounds(UIInterfaceOrientation orientation, CGRec
     for (int i = 0; i < [widgetProps count]; i++) {
         UIVisualEffectView *blurView = [_blurViews objectAtIndex:i];
         UILabel *labelView = [_labelViews objectAtIndex:i];
-        AnyBackdropView *backdropView = [_backdropViews objectAtIndex: i];
+AnyBackdropView *backdropView = [_backdropViews objectAtIndex: i];
         UILabel *maskLabelView = [_maskLabelViews objectAtIndex:i];
+        HeliumImageView *imageView = (i < [_imageViews count]) ? [_imageViews objectAtIndex:i] : nil;
 
         NSDictionary *properties = [widgetProps objectAtIndex:i];
         NSInteger orientationMode = getIntFromDictKey(properties, @"orientationMode", 0);
@@ -772,7 +861,15 @@ static inline CGRect orientationBounds(UIInterfaceOrientation orientation, CGRec
                         [backdropView setHidden:YES];
                         [maskLabelView setHidden:YES];
                     }
-                }break;
+}break;
+            }
+
+            if (imageView) {
+                NSDictionary *imageConfig = ImageConfigForProperties(properties);
+                NSString *imageFile = imageConfig ? getStringFromDictKey(imageConfig, @"imageFile", @"") : @"";
+                BOOL hiddenByOrientation = (orientationMode == 1 && UIInterfaceOrientationIsLandscape(orientation))
+                                        || (orientationMode == 2 && !UIInterfaceOrientationIsLandscape(orientation));
+                [imageView setHidden:(imageConfig == nil || imageFile.length == 0 || hiddenByOrientation)];
             }
         }
     }
